@@ -2,6 +2,8 @@
 
 A lightweight companion server + Grist custom widget that lets [Binary Eye](https://github.com/markusfisch/BinaryEye) write scanned values directly into a Grist table — or jump to matching rows — in real time.
 
+![Screenshot](https://i.ibb.co/YTk0c0YV/Screenshot-From-2026-06-29-17-22-32.png)
+
 ```
 Phone (Binary Eye)  →  HTTP GET  →  Python server  →  WebSocket  →  Grist widget
 ```
@@ -43,9 +45,9 @@ Grist widget URL  →  http://192.168.1.x:8001/widget
 1. Open your Grist document.
 2. Click Add New, then select Add Widget to Page.
 3. Under Select Widget, choose Custom.
-4. Under **Select by**, choose the table you want this widget to interact with.
-3. Set **Widget URL** to `http://<your-ip>:8001/widget`.
-4. Grant **Full document access** when prompted.
+4. Set **Widget URL** to `http://<your-ip>:8001/widget`.
+5. Grant **Full document access** when prompted.
+6. Select your main table, open the Table tab, click Change widget, and change its **Select By** dropdown to the Custom widget.
 
 ### 3. Configure the widget
 
