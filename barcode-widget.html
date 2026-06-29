@@ -685,7 +685,7 @@ function connectWS() {
     try {
       const data = JSON.parse(evt.data);
       if (data.type === 'scan') {
-        document.getElementById('barcode-input').value = data.content;
+        if (inputEl) inputEl.value = data.content;
         handleScan('ws', data.content);
       }
     } catch (e) {}
@@ -827,8 +827,20 @@ async function doWrite(code, source) {
   try {
     const tid = await getTableId();
     await grist.docApi.applyUserActions([['UpdateRecord', tid, selectedRowId, { [barcodeColumn]: code }]]);
-    showStatus('success', checkIco(), `Written to row #${selectedRowId}`);
     if (source === 'manual' && inputEl) inputEl.value = '';
+
+    const idx  = tableData.findIndex(r => r.id === selectedRowId);
+    const next = idx >= 0 && idx + 1 < tableData.length ? tableData[idx + 1] : null;
+    if (next) {
+      await grist.setCursorPos({ rowId: next.id });
+      showStatus('success', checkIco(), `Written · moved to row #${next.id}`);
+    } else {
+      const tid = await getTableId();
+      const { retValues } = await grist.docApi.applyUserActions([['AddRecord', tid, null, {}]]);
+      const newRowId = retValues[0];
+      await grist.setCursorPos({ rowId: newRowId });
+      showStatus('success', checkIco(), `Written · new row #${newRowId} created`);
+    }
   } catch (e) {
     showStatus('error', warnIco(), `Write failed: ${e.message || e}`);
   }
