@@ -25,13 +25,13 @@ Phone (Binary Eye)  →  HTTP GET  →  Python server  →  WebSocket  →  Gris
 
 ```bash
 pip install aiohttp
-python barcode_server.py
+python barcode_widget.py
 ```
 
 By default the server listens on `0.0.0.0:8001`. Override with flags:
 
 ```bash
-python barcode_server.py --host 0.0.0.0 --port 8001
+python barcode_widget.py --host 0.0.0.0 --port 8001
 ```
 
 On startup it logs the URLs you'll need:
@@ -71,7 +71,7 @@ Click the **⚙ Settings** button (top-right of the widget) and:
 
 | Component | Role |
 |-----------|------|
-| `barcode_server.py` | aiohttp server. Serves the widget HTML, accepts Binary Eye HTTP GET requests, and relays scan results to connected widget(s) over WebSocket. |
+| `barcode_widget.py` | aiohttp server. Serves the widget HTML, accepts Binary Eye HTTP GET requests, and relays scan results to connected widget(s) over WebSocket. |
 | `barcode-widget.html` | Grist custom widget. Opens a WebSocket to the server, displays connection status, and writes/finds rows via the Grist Plugin API. |
 
 **Token security:** Each widget instance generates a random 128-bit token. The scan URL and WebSocket path both include this token, so only the correct widget receives a scan. Regenerating the token (Settings → **New token**) instantly invalidates the old Binary Eye URL.
