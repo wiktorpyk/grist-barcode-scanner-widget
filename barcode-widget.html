@@ -167,6 +167,24 @@
     color: var(--text-secondary);
   }
 
+  /* ── Duplicate-block toggle ─────────────────────────────────────────────── */
+  .toggle-row {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle-row input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
   /* ── Mode buttons ────────────────────────────────────────────────────────── */
   .mode-row {
     display: grid;
@@ -486,6 +504,11 @@
       </button>
     </div>
 
+    <label class="toggle-row" for="dupe-check">
+      <input type="checkbox" id="dupe-check" onchange="saveDupeSetting()">
+      Block duplicate barcodes
+    </label>
+
     <div class="status-bar" id="status"></div>
   </div>
 </div>
@@ -582,6 +605,7 @@
 // ═══ State ════════════════════════════════════════════════════════════════════
 let mode          = 'write';
 let barcodeColumn = '';
+let blockDuplicates = false;
 let tableData     = [];
 let selectedRowId = null;
 let columns       = [];
@@ -795,7 +819,8 @@ Promise.all([
   grist.getOption('token').catch(() => null),
   grist.getOption('barcodeColumn').catch(() => null),
   grist.getOption('mode').catch(() => null),
-]).then(([gristToken, col, m]) => {
+  grist.getOption('blockDuplicates').catch(() => null),
+]).then(([gristToken, col, m, blockDup]) => {
   // localStorage wins (this browser's token), then fall back to the grist-stored token,
   // then generate a fresh one and persist it in both places.
   const lsToken = loadToken();
@@ -815,6 +840,12 @@ Promise.all([
   if (lsCol) { barcodeColumn = lsCol; }
   else if (col) { barcodeColumn = col; }
   if (m)   setMode(m, false);
+
+  const lsDup = (() => { try { return localStorage.getItem(LS_TOKEN_KEY + '::blockDup'); } catch(e) { return null; } })();
+  if (lsDup !== null) blockDuplicates = lsDup === 'true';
+  else if (typeof blockDup === 'boolean') blockDuplicates = blockDup;
+  const dupCheckEl = document.getElementById('dupe-check');
+  if (dupCheckEl) dupCheckEl.checked = blockDuplicates;
 
   const lsMin = (() => { try { return localStorage.getItem(LS_TOKEN_KEY + '::minimized') === 'true'; } catch(e) { return false; } })();
   setMinimize(lsMin);
@@ -848,6 +879,13 @@ function saveConfig() {
   barcodeColumn = document.getElementById('barcode-col').value;
   grist.setOption('barcodeColumn', barcodeColumn).catch(() => {});
   try { localStorage.setItem(LS_TOKEN_KEY + '::col', barcodeColumn); } catch (e) {}
+}
+
+function saveDupeSetting() {
+  const el = document.getElementById('dupe-check');
+  blockDuplicates = !!(el && el.checked);
+  grist.setOption('blockDuplicates', blockDuplicates).catch(() => {});
+  try { localStorage.setItem(LS_TOKEN_KEY + '::blockDup', String(blockDuplicates)); } catch (e) {}
 }
 
 // ═══ Mode ═════════════════════════════════════════════════════════════════════
@@ -892,6 +930,16 @@ async function getTableId() {
   throw new Error('Cannot determine table ID — re-open the widget.');
 }
 
+// Returns true if `code` already exists in barcodeColumn on some other row.
+// excludeRowId lets write-mode ignore the row currently being written to.
+function isDuplicate(code, excludeRowId) {
+  return tableData.some(r =>
+    r[barcodeColumn] !== '' && r[barcodeColumn] != null &&
+    String(r[barcodeColumn]) === String(code) &&
+    (excludeRowId == null || r.id !== excludeRowId)
+  );
+}
+
 async function handleScan(source, codeOverride) {
   const code = (codeOverride || (inputEl ? inputEl.value : '')).trim();
   if (!code) {
@@ -910,6 +958,11 @@ async function handleScan(source, codeOverride) {
 async function doWrite(code, source) {
   if (!selectedRowId) {
     showStatus('error', warnIco(), 'No row selected — click a row in the table first.');
+    return;
+  }
+  if (blockDuplicates && isDuplicate(code, selectedRowId)) {
+    showStatus('error', warnIco(), `Duplicate blocked — "${code}" already exists in ${barcodeColumn}.`);
+    if (inputEl) inputEl.focus();
     return;
   }
   try {
@@ -932,6 +985,11 @@ async function doWrite(code, source) {
 }
 
 async function doAppend(code, source) {
+  if (blockDuplicates && isDuplicate(code, null)) {
+    showStatus('error', warnIco(), `Duplicate blocked — "${code}" already exists in ${barcodeColumn}.`);
+    if (inputEl) inputEl.focus();
+    return;
+  }
   try {
     const tid = await getTableId();
     const { retValues } = await grist.docApi.applyUserActions([['AddRecord', tid, null, { [barcodeColumn]: code }]]);
@@ -967,6 +1025,41 @@ function showStatus(type, ico, msg) {
   el.innerHTML = ico + `<span>${msg}</span>`;
   clearTimeout(stTimer);
   stTimer = setTimeout(() => el.classList.remove('visible'), 4500);
+  if (type === 'error') playErrorBeep();
+}
+
+// ═══ Sound ════════════════════════════════════════════════════════════════════
+let audioCtx = null;
+function primeAudio() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  } catch (e) {}
+}
+// Browsers require a user gesture before audio can play. Prime on the first
+// interaction so beeps still fire later for scans arriving over WebSocket.
+document.addEventListener('pointerdown', primeAudio, { once: true });
+document.addEventListener('keydown', primeAudio, { once: true });
+
+function playErrorBeep() {
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    // Two short low descending tones read as an "error" cue.
+    const now = audioCtx.currentTime;
+    [[220, now, 0.12], [175, now + 0.13, 0.16]].forEach(([freq, start, dur]) => {
+      const osc  = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.type = 'square';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.001, start);
+      gain.gain.exponentialRampToValueAtTime(0.18, start + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+      osc.connect(gain).connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + dur + 0.02);
+    });
+  } catch (e) {}
 }
 
 function checkIco() {
