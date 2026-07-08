@@ -506,7 +506,7 @@
 
     <label class="toggle-row" for="dupe-check">
       <input type="checkbox" id="dupe-check" onchange="saveDupeSetting()">
-      Block duplicate barcodes
+      Block duplicate barcodes (error, don't write)
     </label>
 
     <div class="status-bar" id="status"></div>
@@ -940,6 +940,14 @@ function isDuplicate(code, excludeRowId) {
   );
 }
 
+// Binary Eye's "Scan continuously" mode re-reads the same barcode across
+// multiple camera frames and fires a scan event for each one. Without a
+// cooldown, a single physical scan can trigger doWrite/doAppend more than
+// once (e.g. two rows appended for one barcode). Debounce identical scans
+// for mutating modes only — Find/jump is non-destructive so it's left alone.
+let lastMutation = { code: null, mode: null, time: 0 };
+const SCAN_DEBOUNCE_MS = 2000;
+
 async function handleScan(source, codeOverride) {
   const code = (codeOverride || (inputEl ? inputEl.value : '')).trim();
   if (!code) {
@@ -949,6 +957,15 @@ async function handleScan(source, codeOverride) {
   if (!barcodeColumn) {
     showStatus('error', warnIco(), 'Select a barcode column in Settings (⚙).');
     return;
+  }
+  if (mode === 'write' || mode === 'append') {
+    const now = Date.now();
+    if (lastMutation.code === code && lastMutation.mode === mode && (now - lastMutation.time) < SCAN_DEBOUNCE_MS) {
+      showStatus('info', infoIco(), `Ignored repeat scan of "${code}"`);
+      if (inputEl) inputEl.focus();
+      return;
+    }
+    lastMutation = { code, mode, time: now };
   }
   if      (mode === 'write')  await doWrite(code, source);
   else if (mode === 'append') await doAppend(code, source);
@@ -1067,6 +1084,9 @@ function checkIco() {
 }
 function warnIco() {
   return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>`;
+}
+function infoIco() {
+  return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25h.008v4.5h-.008v-4.5ZM12 7.5h.008v.008H12V7.5Z"/><circle cx="12" cy="12" r="8.25" stroke-width="1.6"/></svg>`;
 }
 
 window.addEventListener('load', () => { if (inputEl) inputEl.focus(); });
