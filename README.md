@@ -1,97 +1,62 @@
 # Barcode Scanner Widget for Grist
 
-A lightweight companion server + Grist custom widget that lets [Binary Eye](https://github.com/markusfisch/BinaryEye) write scanned values directly into a Grist table — or jump to matching rows — in real time.
+A lightweight Python server + Grist custom widget that lets [Binary Eye](https://github.com/markusfisch/BinaryEye) stream scanned values directly into a Grist table in real time.
 
 ![Screenshot](https://i.ibb.co/YTk0c0YV/Screenshot-From-2026-06-29-17-22-32.png)
 
-```
-Phone (Binary Eye)  →  HTTP GET  →  Python server  →  WebSocket  →  Grist widget
+
 ```
 
----
+Phone (Binary Eye) → HTTP GET → Python Server → WebSocket → Grist Widget
+
+```
 
 ## Requirements
-
 - Python 3.11+
-- [`aiohttp`](https://docs.aiohttp.org/) (`pip install aiohttp`)
-- The phone running Binary Eye must be on the **same LAN** as the server (or the server must be reachable from the phone)
-- Grist
+- Phone and server must be on the same local network (LAN)
 
----
+## Quick Start
 
-## Setup
-
-### 1. Run the server
-
+### 1. Run the Server
 ```bash
 pip install aiohttp
-python barcode_widget.py
-```
-
-By default the server listens on `0.0.0.0:8001`. Override with flags:
-
-```bash
-python barcode_widget.py --host 0.0.0.0 --port 8001
-```
-
-On startup it logs the URLs you'll need:
+python barcode-widget.py
 
 ```
-Grist widget URL  →  http://192.168.1.x:8001/widget
-```
 
-### 2. Add the widget to Grist
+*Runs on `0.0.0.0:8001` by default. Override using flags: `--host 0.0.0.0 --port 8001`.*
 
-1. Open your Grist document.
-2. Click Add New, then select Add Widget to Page.
-3. Under Select Widget, choose Custom.
-4. Set **Widget URL** to `http://<your-ip>:8001/widget`.
-5. Grant **Full document access** when prompted.
-6. Select your main table, open the Table tab, click Change widget, and change its **Select By** dropdown to the Custom widget.
+### 2. Add the Widget to Grist
 
-### 3. Configure the widget
+1. In your Grist document, click **Add New** → **Add Widget to Page**.
+2. Choose **Custom** and set the Widget URL to `http://<your-server-ip>:8001/widget`.
+3. Grant **Full document access** when prompted.
+4. Select the target table. In the right panel under the **Table** tab, set **Select By** to the Custom widget.
 
-Click the **⚙ Settings** button (top-right of the widget) and:
+### 3. Configure the Widget & Phone
 
-- Choose the **barcode column** from your linked table.
-- Copy the **server URL** or scan the **QR code** to configure Binary Eye.
-
-### 4. Configure Binary Eye
-
-
-1. Open Binary Eye, tap the three-dot menu (top-right), then Settings.
-2. Enable Forward scans.
-3. Set URL to the server URL shown above (copy or scan the QR code).
-4. Set Request type to GET with complete query string.
-5. Enable Scan continuously.
+Open the widget settings (⚙ icon) and follow the Binary Eye setup instructions.
 
 ---
 
-## How it works
+## Operation Modes
 
-| Component | Role |
-|-----------|------|
-| `barcode_widget.py` | aiohttp server. Serves the widget HTML, accepts Binary Eye HTTP GET requests, and relays scan results to connected widget(s) over WebSocket. |
-| `barcode-widget.html` | Grist custom widget. Opens a WebSocket to the server, displays connection status, and writes/finds rows via the Grist Plugin API. |
+Adjust these behavioral settings directly inside the widget UI:
 
-**Token security:** Each widget instance generates a random 128-bit token. The scan URL and WebSocket path both include this token, so only the correct widget receives a scan. Regenerating the token (Settings → **New token**) instantly invalidates the old Binary Eye URL.
-
----
-
-## Modes
-
-| Mode | What happens when a barcode is scanned |
-|------|----------------------------------------|
-| **Write to row** | Writes the scanned value into the barcode column of the currently selected row. |
-| **Find row** | Searches the table for a row whose barcode column matches the scanned value and jumps to it. |
+* **Write to row:** Inserts the barcode into the active row and moves down.
+* **Append row:** Creates a new row with the scanned value at the bottom of the table.
+* **Find row:** Searches your table for a matching barcode and instantly jumps to that row.
 
 ---
 
-## Routes
+## Security & Architecture
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/widget` | Serves `barcode-widget.html` with correct headers for Grist iframe embedding. |
-| `GET` | `/scan/{token}` | Receives Binary Eye scan results (`?content=…&format=…&timestamp=…`) and forwards them over WebSocket. |
-| `GET` | `/ws/{token}` | Widget WebSocket endpoint. |
-| `GET` | `/health` | JSON liveness check: `{"status":"ok","active_tokens":N,"clients":N}`. |
+* **Token-based routing:** Each widget instance generates a unique, random 128-bit token included in both the scan URL and the WebSocket handshake path.
+* **Revocation:** Clicking **New token** inside the settings instantly invalidates older device configurations.
+
+### HTTP Endpoints
+
+* `GET /widget` — Serves the widget UI.
+* `GET /scan/{token}` — Receives scan results (`?content=…&format=…`) from Binary Eye.
+* `GET /ws/{token}` — WebSocket connection endpoint for the widget.
+* `GET /health` — Liveness check: `{"status":"ok","active_tokens":N,"clients":N}`.

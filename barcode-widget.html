@@ -170,7 +170,7 @@
   /* ── Mode buttons ────────────────────────────────────────────────────────── */
   .mode-row {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr;
     gap: 6px;
   }
   .mode-btn {
@@ -422,7 +422,7 @@
   }
   body.is-minimized #minimized-view {
     display: grid !important;
-    grid-template-columns: 1fr 1fr 1fr;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
     gap: 4px;
     width: 100%;
   }
@@ -472,6 +472,12 @@
         </svg>
         Write to row
       </button>
+      <button class="mode-btn" id="btn-append" onclick="setMode('append')">
+        <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+        </svg>
+        Append row
+      </button>
       <button class="mode-btn" id="btn-jump" onclick="setMode('jump')">
         <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"/>
@@ -490,6 +496,12 @@
       <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z"/>
     </svg>
     Write
+  </button>
+  <button class="mode-btn" id="min-btn-append" onclick="setMode('append')">
+    <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15"/>
+    </svg>
+    Append
   </button>
   <button class="mode-btn" id="min-btn-jump" onclick="setMode('jump')">
     <svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
@@ -842,12 +854,15 @@ function saveConfig() {
 function setMode(m, persist = true) {
   mode = m;
   document.getElementById('btn-write').classList.toggle('active', m === 'write');
+  document.getElementById('btn-append').classList.toggle('active', m === 'append');
   document.getElementById('btn-jump').classList.toggle('active',  m === 'jump');
 
-  const minWrite = document.getElementById('min-btn-write');
-  const minJump = document.getElementById('min-btn-jump');
-  if (minWrite) minWrite.classList.toggle('active', m === 'write');
-  if (minJump) minJump.classList.toggle('active', m === 'jump');
+  const minWrite  = document.getElementById('min-btn-write');
+  const minAppend = document.getElementById('min-btn-append');
+  const minJump   = document.getElementById('min-btn-jump');
+  if (minWrite)  minWrite.classList.toggle('active', m === 'write');
+  if (minAppend) minAppend.classList.toggle('active', m === 'append');
+  if (minJump)   minJump.classList.toggle('active', m === 'jump');
 
   if (persist) grist.setOption('mode', m).catch(() => {});
 }
@@ -887,8 +902,9 @@ async function handleScan(source, codeOverride) {
     showStatus('error', warnIco(), 'Select a barcode column in Settings (⚙).');
     return;
   }
-  if (mode === 'write') await doWrite(code, source);
-  else                  await doJump(code, source);
+  if      (mode === 'write')  await doWrite(code, source);
+  else if (mode === 'append') await doAppend(code, source);
+  else                        await doJump(code, source);
 }
 
 async function doWrite(code, source) {
@@ -907,14 +923,24 @@ async function doWrite(code, source) {
       await grist.setCursorPos({ rowId: next.id });
       showStatus('success', checkIco(), `Written · moved to row #${next.id}`);
     } else {
-      const tid = await getTableId();
-      const { retValues } = await grist.docApi.applyUserActions([['AddRecord', tid, null, {}]]);
-      const newRowId = retValues[0];
-      await grist.setCursorPos({ rowId: newRowId });
-      showStatus('success', checkIco(), `Written · new row #${newRowId} created`);
+      showStatus('error', warnIco(), 'Written, but reached the end of the table — no next row to move to. Switch to Append mode to add new rows.');
     }
   } catch (e) {
     showStatus('error', warnIco(), `Write failed: ${e.message || e}`);
+  }
+  if (inputEl) inputEl.focus();
+}
+
+async function doAppend(code, source) {
+  try {
+    const tid = await getTableId();
+    const { retValues } = await grist.docApi.applyUserActions([['AddRecord', tid, null, { [barcodeColumn]: code }]]);
+    const newRowId = retValues[0];
+    await grist.setCursorPos({ rowId: newRowId });
+    if (source === 'manual' && inputEl) inputEl.value = '';
+    showStatus('success', checkIco(), `Appended · new row #${newRowId} created`);
+  } catch (e) {
+    showStatus('error', warnIco(), `Append failed: ${e.message || e}`);
   }
   if (inputEl) inputEl.focus();
 }

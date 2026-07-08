@@ -10,7 +10,7 @@ Routes:
 
 Usage:
   pip install aiohttp
-  python barcode_server.py [--host 0.0.0.0] [--port 8001]
+  python barcode-widget.py [--host 0.0.0.0] [--port 8001]
 
 Then in Grist → Custom Widget URL: http://<your-lan-ip>:8001/widget
 """
