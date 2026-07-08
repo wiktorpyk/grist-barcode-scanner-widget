@@ -745,6 +745,9 @@ async function copyUrl() {
 }
 
 // ═══ WebSocket ════════════════════════════════════════════════════════════════
+// Must match SUPERSEDED_CLOSE_CODE in barcode-widget.py.
+const SUPERSEDED_CLOSE_CODE = 4409;
+
 function setWsState(state, detail) {
   wsState = state;
   const pill  = document.getElementById('conn-pill');
@@ -771,15 +774,24 @@ function connectWS() {
 
   const url = `ws://${serverHost()}/ws/${token}`;
   setWsState('connecting');
-  ws = new WebSocket(url);
+  const socket = new WebSocket(url);
+  ws = socket;
 
-  ws.onopen = () => {
+  // Every callback below checks `ws === socket` first. connectWS() can be
+  // called again (e.g. from a rapid reconnect) before this socket's own
+  // close event has fired; without this guard, a stale event from a socket
+  // that's no longer "current" could null out — or reconnect over — a
+  // perfectly healthy newer connection. That race is what let two sessions
+  // on the same token get stuck endlessly kicking each other off.
+  socket.onopen = () => {
+    if (ws !== socket) return;
     clearTimeout(reconnTimer);
     setWsState('connected');
     updateBeUrl();
   };
 
-  ws.onmessage = (evt) => {
+  socket.onmessage = (evt) => {
+    if (ws !== socket) return;
     try {
       const data = JSON.parse(evt.data);
       if (data.type === 'scan') {
@@ -789,13 +801,21 @@ function connectWS() {
     } catch (e) {}
   };
 
-  ws.onclose = () => {
+  socket.onclose = (evt) => {
+    if (ws !== socket) return;
     ws = null;
+
+    if (evt && evt.code === SUPERSEDED_CLOSE_CODE) {
+      clearTimeout(reconnTimer);
+      setWsState('disconnected', 'Another session took over this token — refresh to reconnect');
+      return;
+    }
+
     setWsState('disconnected', `Server unreachable · retrying in 3s`);
     reconnTimer = setTimeout(connectWS, 3000);
   };
 
-  ws.onerror = () => {};
+  socket.onerror = () => {};
 }
 
 // ═══ Grist API ════════════════════════════════════════════════════════════════

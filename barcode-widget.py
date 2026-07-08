@@ -26,6 +26,8 @@ from pathlib import Path
 
 from aiohttp import web, WSMsgType
 
+SUPERSEDED_CLOSE_CODE = 4409
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
@@ -34,6 +36,10 @@ logging.basicConfig(
 log = logging.getLogger("barcode")
 
 # token -> set of open WebSocket connections
+# NOTE: only one connection per token is allowed at a time (see ws_handler).
+# The set is kept (rather than a single value) only so the "kick the old
+# connection out, then register the new one" transition and the disconnect
+# cleanup below stay simple/symmetric.
 _connections: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
 
 WIDGET_HTML_PATH = Path(__file__).parent / "barcode-widget.html"
@@ -68,6 +74,25 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     token = request.match_info["token"]
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
+
+    # Only one widget should be listening on a given token at a time (e.g. the
+    # widget was reloaded, or opened in a second tab/device). Kick out any
+    # existing connection(s) for this token before registering the new one.
+    old_conns = _connections.get(token)
+    if old_conns:
+        log.info(
+            "WS  superseding %d old connection(s) for token=%.8s…",
+            len(old_conns), token,
+        )
+        for old_ws in list(old_conns):
+            try:
+                await old_ws.close(
+                    code=SUPERSEDED_CLOSE_CODE,
+                    message=b"Replaced by a new connection with the same token",
+                )
+            except Exception:
+                pass
+        old_conns.clear()
 
     _connections[token].add(ws)
     log.info("WS  connected   token=%.8s…  clients=%d", token, len(_connections[token]))
