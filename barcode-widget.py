@@ -3,16 +3,16 @@
 Barcode companion server for the Grist barcode scanner widget.
 
 Routes:
-  GET /widget          — serve the widget HTML (use this URL in Grist)
+  GET /widget          — Serve the widget HTML (use this URL in Grist)
   GET /scan/{token}    — Binary Eye sends scan results here
-  GET /ws/{token}      — widget WebSocket connection
-  GET /health          — liveness check
+  GET /ws/{token}      — Widget WebSocket connection
+  GET /health          — Liveness check
 
 Usage:
   pip install aiohttp
   python barcode-widget.py [--host 0.0.0.0] [--port 8001]
 
-Then in Grist → Custom Widget URL: http://<your-lan-ip>:8001/widget
+In Grist, set the Custom Widget URL to: http://<your-lan-ip>:8001/widget
 """
 
 import asyncio
@@ -35,20 +35,15 @@ logging.basicConfig(
 )
 log = logging.getLogger("barcode")
 
-# token -> set of open WebSocket connections
-# NOTE: only one connection per token is allowed at a time (see ws_handler).
-# The set is kept (rather than a single value) only so the "kick the old
-# connection out, then register the new one" transition and the disconnect
-# cleanup below stay simple/symmetric.
 _connections: dict[str, set[web.WebSocketResponse]] = defaultdict(set)
 
 WIDGET_HTML_PATH = Path(__file__).parent / "barcode-widget.html"
 
 
-# ── Widget HTML ────────────────────────────────────────────────────────────────
-
 async def widget_handler(request: web.Request) -> web.Response:
-    """Serve the widget HTML. Grist's Custom Widget URL points here."""
+    """
+    Serve the widget HTML.
+    """
     if not WIDGET_HTML_PATH.exists():
         return web.Response(status=404, text="barcode-widget.html not found next to server script")
     html = WIDGET_HTML_PATH.read_text(encoding="utf-8")
@@ -56,9 +51,7 @@ async def widget_handler(request: web.Request) -> web.Response:
         text=html,
         content_type="text/html",
         headers={
-            # Allow Grist to embed the widget in an iframe
             "X-Frame-Options": "ALLOWALL",
-            # Permissive CSP so the widget can open a WebSocket back to us
             "Content-Security-Policy": (
                 "default-src 'self' 'unsafe-inline' 'unsafe-eval' "
                 "https://docs.getgrist.com https://cdnjs.cloudflare.com; "
@@ -68,22 +61,17 @@ async def widget_handler(request: web.Request) -> web.Response:
     )
 
 
-# ── WebSocket handler ──────────────────────────────────────────────────────────
-
 async def ws_handler(request: web.Request) -> web.WebSocketResponse:
+    """
+    Handle the WebSocket connection for the widget.
+    """
     token = request.match_info["token"]
     ws = web.WebSocketResponse(heartbeat=20)
     await ws.prepare(request)
 
-    # Only one widget should be listening on a given token at a time (e.g. the
-    # widget was reloaded, or opened in a second tab/device). Kick out any
-    # existing connection(s) for this token before registering the new one.
     old_conns = _connections.get(token)
     if old_conns:
-        log.info(
-            "WS  superseding %d old connection(s) for token=%.8s…",
-            len(old_conns), token,
-        )
+        log.info("WS  superseding %d old connection(s) for token=%.8s…", len(old_conns), token)
         for old_ws in list(old_conns):
             try:
                 await old_ws.close(
@@ -123,16 +111,9 @@ async def ws_handler(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
-# ── Binary Eye HTTP handler ────────────────────────────────────────────────────
-
 async def scan_handler(request: web.Request) -> web.Response:
     """
-    Receives scan results from Binary Eye.
-
-    Binary Eye URL template (set in Binary Eye → Settings → URL):
-      http://<host>:8001/scan/<token>?content={content}&format={format}&timestamp={timestamp}
-
-    Request type must be set to: GET with complete query string
+    Receive scan results from the Binary Eye app.
     """
     token = request.match_info["token"]
     q = request.rel_url.query
@@ -145,7 +126,7 @@ async def scan_handler(request: web.Request) -> web.Response:
 
     if not content:
         log.warning("SCAN  missing 'content' param — check your Binary Eye URL template")
-        return web.Response(text="OK (no content)")  # Binary Eye treats non-200 as error
+        return web.Response(text="OK (no content)")
 
     if token not in _connections or not _connections[token]:
         log.warning("SCAN  no widgets listening on token=%.8s…", token)
@@ -172,9 +153,10 @@ async def scan_handler(request: web.Request) -> web.Response:
     return web.Response(text="OK")
 
 
-# ── Health ─────────────────────────────────────────────────────────────────────
-
 async def health_handler(request: web.Request) -> web.Response:
+    """
+    Return a JSON status of the server, including active connection counts.
+    """
     total = sum(len(v) for v in _connections.values())
     return web.Response(
         content_type="application/json",
@@ -186,10 +168,11 @@ async def health_handler(request: web.Request) -> web.Response:
     )
 
 
-# ── CORS middleware ────────────────────────────────────────────────────────────
-
 @web.middleware
 async def cors_middleware(request: web.Request, handler):
+    """
+    Middleware to handle Cross-Origin Resource Sharing (CORS) headers.
+    """
     if request.method == "OPTIONS":
         return web.Response(headers={
             "Access-Control-Allow-Origin":  "*",
@@ -201,9 +184,10 @@ async def cors_middleware(request: web.Request, handler):
     return resp
 
 
-# ── App factory ────────────────────────────────────────────────────────────────
-
 def make_app() -> web.Application:
+    """
+    Initialize the aiohttp application with routes and middleware.
+    """
     app = web.Application(middlewares=[cors_middleware])
     app.router.add_get("/widget",       widget_handler)
     app.router.add_get("/scan/{token}", scan_handler)
@@ -212,10 +196,10 @@ def make_app() -> web.Application:
     return app
 
 
-# ── Entry point ────────────────────────────────────────────────────────────────
-
 def _lan_ip() -> str:
-    """Best-effort guess at the LAN IP for display purposes."""
+    """
+    Perform a best-effort guess at the host's LAN IP address.
+    """
     try:
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         s.connect(("8.8.8.8", 80))
@@ -227,6 +211,9 @@ def _lan_ip() -> str:
 
 
 def main():
+    """
+    Parse CLI arguments and start the web server.
+    """
     parser = argparse.ArgumentParser(description="Barcode companion server")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8001)

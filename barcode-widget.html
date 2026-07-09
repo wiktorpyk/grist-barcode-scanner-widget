@@ -506,7 +506,7 @@
 
     <label class="toggle-row" for="dupe-check">
       <input type="checkbox" id="dupe-check" onchange="saveDupeSetting()">
-      Block duplicate barcodes (error, don't write)
+      Block duplicate barcodes
     </label>
 
     <div class="status-bar" id="status"></div>
@@ -551,7 +551,7 @@
   </div>
   
   <div class="card">
-    <div class="card-label">Server URL</div>
+    <div class="card-label">Binary Eye URL</div>
     <div class="url-box empty" id="be-url">Waiting for server…</div>
     <div class="qr-wrap">
       <div class="qr-box" id="qr-box">
@@ -596,31 +596,59 @@
       </div>
       <div class="instr-step">
         <div class="step-num">5</div>
-        <div class="step-text">Enable <strong>Scan continuously</strong>.</div>
+        <div class="step-text">Enable <strong>Scan continuously (optional)</strong>.</div>
       </div>
     </div>
   </div>
 
 </div><script>
-// ═══ State ════════════════════════════════════════════════════════════════════
-let mode          = 'write';
-let barcodeColumn = '';
-let blockDuplicates = false;
-let tableData     = [];
-let selectedRowId = null;
-let columns       = [];
-let token         = '';
-let ws            = null;
-let wsState       = 'disconnected';
-let reconnTimer   = null;
-let settingsOpen  = false;
-let minimized     = false;
-let qrInstance    = null;
+// --- State Variables ---
 
-// localStorage key — scoped to this server origin so different servers don't collide
+/** @type {'write'|'append'|'jump'} The current operational mode of the widget. */
+let mode = 'write';
+
+/** @type {string} The column name currently selected for barcode operations. */
+let barcodeColumn = '';
+
+/** @type {boolean} Whether to prevent duplicate entries in the selected column. */
+let blockDuplicates = false;
+
+/** @type {Array<Object>} Cached records from the Grist widget. */
+let tableData = [];
+
+/** @type {number|null} The ID of the currently selected row in Grist. */
+let selectedRowId = null;
+
+/** @type {Array<string>} List of available columns in the current Grist table. */
+let columns = [];
+
+/** @type {string} Unique identifier for this browser instance's connection. */
+let token = '';
+
+/** @type {WebSocket|null} The active WebSocket connection. */
+let ws = null;
+
+/** @type {'connected'|'connecting'|'disconnected'} Current WebSocket connection state. */
+let wsState = 'disconnected';
+
+/** @type {number|null} Timeout ID for reconnection attempts. */
+let reconnTimer = null;
+
+/** @type {boolean} Toggle state for the settings panel. */
+let settingsOpen = false;
+
+/** @type {boolean} Toggle state for the widget minimized view. */
+let minimized = false;
+
+/** @type {any} Reference to the QR code generation instance. */
+let qrInstance = null;
+
+/** @constant {string} Local storage key scoped to the current host. */
 const LS_TOKEN_KEY = `barcode_scanner_token::${window.location.host}`;
 
-// ═══ Settings toggle ══════════════════════════════════════════════════════════
+/**
+ * Toggles the settings panel visibility.
+ */
 function toggleSettings() {
   settingsOpen = !settingsOpen;
   document.getElementById('settings-panel').classList.toggle('open', settingsOpen);
@@ -628,45 +656,62 @@ function toggleSettings() {
   document.getElementById('settings-btn').classList.toggle('active', settingsOpen);
 }
 
-// ═══ Minimize view toggle ════════════════════════════════════════════════════
+/**
+ * Sets the minimized state of the widget and persists it to local storage.
+ * @param {boolean} min - Whether the widget should be minimized.
+ */
 function setMinimize(min) {
   minimized = min;
   document.body.classList.toggle('is-minimized', minimized);
-  try { localStorage.setItem(LS_TOKEN_KEY + '::minimized', minimized); } catch (e) {}
+  try { localStorage.setItem(LS_TOKEN_KEY + '::minimized', String(minimized)); } catch (e) {}
 }
 
+/**
+ * Toggles between minimized and expanded states.
+ */
 function toggleMinimize() {
   setMinimize(!minimized);
 }
 
-// ═══ Utility: derive server host from page origin ═════════════════════════════
-// Widget is served by the Python server at /widget, so location.host === server host:port.
+/**
+ * Utility to derive the server host from the current page origin.
+ * @returns {string} The server host and port.
+ */
 function serverHost() {
   const h = window.location.host;
   return h && h !== '' ? h : 'localhost:8001';
 }
 
-// ═══ Token ════════════════════════════════════════════════════════════════════
-// Priority:
-//   1. localStorage  — survives refreshes, unique per browser
-//   2. grist option  — fallback (other browsers / first load without localStorage)
-//   3. generate new  — first ever visit on this browser
-
+/**
+ * Retrieves the token from local storage.
+ * @returns {string|null} The stored token or null.
+ */
 function loadToken() {
   try { return localStorage.getItem(LS_TOKEN_KEY) || null; } catch (e) { return null; }
 }
 
+/**
+ * Persists the token to local storage and Grist options.
+ * @param {string} t - The token string.
+ */
 function saveToken(t) {
   try { localStorage.setItem(LS_TOKEN_KEY, t); } catch (e) {}
   grist.setOption('token', t).catch(() => {});
 }
 
+/**
+ * Generates a random 16-byte hex token.
+ * @returns {string} The generated token.
+ */
 function makeToken() {
   const a = new Uint8Array(16);
   crypto.getRandomValues(a);
   return Array.from(a).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Regenerates the token, updates UI, and reconnects the WebSocket.
+ */
 function regenerateToken() {
   if (!confirm('Generate a new token?\nThe current Binary Eye URL will stop working.')) return;
   token = makeToken();
@@ -675,13 +720,18 @@ function regenerateToken() {
   connectWS();
 }
 
-// ═══ Server URL ═══════════════════════════════════════════════════════════════
+/**
+ * Constructs the Binary Eye scanner URL.
+ * @returns {string} The formatted URL.
+ */
 function getBeUrl() {
   if (!token) return '';
-  // Binary Eye replaces {content}, {format}, {timestamp} at scan time
   return `http://${serverHost()}/scan/${token}?`;
 }
 
+/**
+ * Updates the UI with the current Binary Eye URL.
+ */
 function updateBeUrl() {
   const url = getBeUrl();
   const el  = document.getElementById('be-url');
@@ -696,12 +746,13 @@ function updateBeUrl() {
   }
 }
 
-// ═══ QR code ══════════════════════════════════════════════════════════════════
+/**
+ * Renders a QR code for the provided URL.
+ * @param {string} url - The URL to encode.
+ */
 function renderQr(url) {
   const box = document.getElementById('qr-box');
-  // Wipe everything — prevents multiple QR canvases stacking up on token regen
   box.innerHTML = '';
-
   const container = document.createElement('div');
   box.appendChild(container);
 
@@ -719,12 +770,17 @@ function renderQr(url) {
   }
 }
 
+/**
+ * Clears the QR code container.
+ */
 function clearQr() {
   const box = document.getElementById('qr-box');
   box.innerHTML = '<div class="qr-empty" id="qr-empty">URL not available yet</div>';
 }
 
-// ═══ Copy URL ═════════════════════════════════════════════════════════════════
+/**
+ * Copies the current scan URL to the clipboard.
+ */
 async function copyUrl() {
   const url = getBeUrl();
   if (!url) return;
@@ -744,10 +800,11 @@ async function copyUrl() {
   setTimeout(() => { btn.classList.remove('copied'); btn.innerHTML = orig; }, 2000);
 }
 
-// ═══ WebSocket ════════════════════════════════════════════════════════════════
-// Must match SUPERSEDED_CLOSE_CODE in barcode-widget.py.
-const SUPERSEDED_CLOSE_CODE = 4409;
-
+/**
+ * Updates the connection status pill and UI labels.
+ * @param {'connected'|'connecting'|'disconnected'} state - The connection state.
+ * @param {string} [detail] - Optional status message.
+ */
 function setWsState(state, detail) {
   wsState = state;
   const pill  = document.getElementById('conn-pill');
@@ -768,6 +825,9 @@ function setWsState(state, detail) {
   }
 }
 
+/**
+ * Establishes a WebSocket connection to the scan server.
+ */
 function connectWS() {
   if (ws) { try { ws.close(); } catch (e) {} ws = null; }
   if (!token) return;
@@ -777,12 +837,6 @@ function connectWS() {
   const socket = new WebSocket(url);
   ws = socket;
 
-  // Every callback below checks `ws === socket` first. connectWS() can be
-  // called again (e.g. from a rapid reconnect) before this socket's own
-  // close event has fired; without this guard, a stale event from a socket
-  // that's no longer "current" could null out — or reconnect over — a
-  // perfectly healthy newer connection. That race is what let two sessions
-  // on the same token get stuck endlessly kicking each other off.
   socket.onopen = () => {
     if (ws !== socket) return;
     clearTimeout(reconnTimer);
@@ -795,8 +849,7 @@ function connectWS() {
     try {
       const data = JSON.parse(evt.data);
       if (data.type === 'scan') {
-        if (inputEl) inputEl.value = data.content;
-        handleScan('ws', data.content);
+        handleScan(data.content);
       }
     } catch (e) {}
   };
@@ -805,9 +858,10 @@ function connectWS() {
     if (ws !== socket) return;
     ws = null;
 
-    if (evt && evt.code === SUPERSEDED_CLOSE_CODE) {
+    // SUPERSEDED_CLOSE_CODE: 4409
+    if (evt && evt.code === 4409) {
       clearTimeout(reconnTimer);
-      setWsState('disconnected', 'Another session took over this token — refresh to reconnect');
+      setWsState('disconnected', 'Another session has been opened — refresh to reconnect');
       return;
     }
 
@@ -818,9 +872,8 @@ function connectWS() {
   socket.onerror = () => {};
 }
 
-// ═══ Grist API ════════════════════════════════════════════════════════════════
+// Initialization and Grist event listeners...
 grist.ready({ requiredAccess: 'full', allowSelectBy: true });
-
 grist.onRecord(r  => { selectedRowId = r ? r.id : null; });
 grist.onNewRecord(() => { selectedRowId = null; });
 
@@ -835,27 +888,25 @@ grist.onRecords(records => {
   }
 });
 
+// Setup promises
 Promise.all([
   grist.getOption('token').catch(() => null),
   grist.getOption('barcodeColumn').catch(() => null),
   grist.getOption('mode').catch(() => null),
   grist.getOption('blockDuplicates').catch(() => null),
 ]).then(([gristToken, col, m, blockDup]) => {
-  // localStorage wins (this browser's token), then fall back to the grist-stored token,
-  // then generate a fresh one and persist it in both places.
   const lsToken = loadToken();
   if (lsToken) {
     token = lsToken;
-    // Keep grist option in sync so other browsers can bootstrap from it on first load
     if (lsToken !== gristToken) grist.setOption('token', token).catch(() => {});
   } else if (gristToken) {
     token = gristToken;
-    saveToken(token);   // adopt into this browser's localStorage going forward
+    saveToken(token);
   } else {
     token = makeToken();
     saveToken(token);
   }
-  // Prefer localStorage column (survives refresh), fall back to grist option
+  
   const lsCol = (() => { try { return localStorage.getItem(LS_TOKEN_KEY + '::col'); } catch(e) { return null; } })();
   if (lsCol) { barcodeColumn = lsCol; }
   else if (col) { barcodeColumn = col; }
@@ -874,7 +925,10 @@ Promise.all([
   connectWS();
 });
 
-
+/**
+ * Populates the column selection dropdown.
+ * @param {Array<string>} cols - Available columns.
+ */
 function populateColSel(cols) {
   const sel = document.getElementById('barcode-col');
   sel.innerHTML = '';
@@ -885,22 +939,26 @@ function populateColSel(cols) {
   });
 
   if (barcodeColumn && cols.includes(barcodeColumn)) {
-    // Persisted column still exists — use it
     sel.value = barcodeColumn;
   } else if (cols.length > 0) {
-    // Default to first column and persist that choice
     barcodeColumn = cols[0];
     sel.value = barcodeColumn;
     saveConfig();
   }
 }
 
+/**
+ * Persists the column configuration to Grist and localStorage.
+ */
 function saveConfig() {
   barcodeColumn = document.getElementById('barcode-col').value;
   grist.setOption('barcodeColumn', barcodeColumn).catch(() => {});
   try { localStorage.setItem(LS_TOKEN_KEY + '::col', barcodeColumn); } catch (e) {}
 }
 
+/**
+ * Persists the duplicate blocking setting.
+ */
 function saveDupeSetting() {
   const el = document.getElementById('dupe-check');
   blockDuplicates = !!(el && el.checked);
@@ -908,7 +966,11 @@ function saveDupeSetting() {
   try { localStorage.setItem(LS_TOKEN_KEY + '::blockDup', String(blockDuplicates)); } catch (e) {}
 }
 
-// ═══ Mode ═════════════════════════════════════════════════════════════════════
+/**
+ * Sets the operational mode.
+ * @param {string} m - The mode to switch to.
+ * @param {boolean} [persist=true] - Whether to save the mode to Grist options.
+ */
 function setMode(m, persist = true) {
   mode = m;
   document.getElementById('btn-write').classList.toggle('active', m === 'write');
@@ -925,17 +987,12 @@ function setMode(m, persist = true) {
   if (persist) grist.setOption('mode', m).catch(() => {});
 }
 
-// ═══ Scan logic ═══════════════════════════════════════════════════════════════
-// Note: Ensure that the 'barcode-input' DOM element is uncommented in the body HTML 
-// if you wish to use manual input scanning listeners below without triggering a JS error.
-const inputEl = document.getElementById('barcode-input');
-if (inputEl) {
-  inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter') { e.preventDefault(); handleScan('manual'); }
-  });
-}
-
 let tableIdCache = null;
+
+/**
+ * Retrieves the Grist table ID, using caching.
+ * @returns {Promise<string>} The Table ID.
+ */
 async function getTableId() {
   if (tableIdCache) return tableIdCache;
   if (grist.selectedTable) {
@@ -950,8 +1007,12 @@ async function getTableId() {
   throw new Error('Cannot determine table ID — re-open the widget.');
 }
 
-// Returns true if `code` already exists in barcodeColumn on some other row.
-// excludeRowId lets write-mode ignore the row currently being written to.
+/**
+ * Checks if a code exists in the current dataset.
+ * @param {string} code - The barcode value.
+ * @param {number|null} excludeRowId - Row ID to ignore during the check.
+ * @returns {boolean} True if duplicate found.
+ */
 function isDuplicate(code, excludeRowId) {
   return tableData.some(r =>
     r[barcodeColumn] !== '' && r[barcodeColumn] != null &&
@@ -960,38 +1021,43 @@ function isDuplicate(code, excludeRowId) {
   );
 }
 
-// Binary Eye's "Scan continuously" mode re-reads the same barcode across
-// multiple camera frames and fires a scan event for each one. Without a
-// cooldown, a single physical scan can trigger doWrite/doAppend more than
-// once (e.g. two rows appended for one barcode). Debounce identical scans
-// for mutating modes only — Find/jump is non-destructive so it's left alone.
 let lastMutation = { code: null, mode: null, time: 0 };
 const SCAN_DEBOUNCE_MS = 2000;
 
-async function handleScan(source, codeOverride) {
-  const code = (codeOverride || (inputEl ? inputEl.value : '')).trim();
+/**
+ * Orchestrates scanning logic based on the incoming WebSocket message.
+ * @param {string} code - The barcode value.
+ */
+async function handleScan(code) {
   if (!code) {
-    showStatus('error', warnIco(), 'Enter a barcode value first.');
+    showStatus('error', warnIco(), 'Empty scan received.');
     return;
   }
   if (!barcodeColumn) {
     showStatus('error', warnIco(), 'Select a barcode column in Settings (⚙).');
     return;
   }
+  
+  // Logic for mode
   if (mode === 'write' || mode === 'append') {
     const now = Date.now();
     if (lastMutation.code === code && lastMutation.mode === mode && (now - lastMutation.time) < SCAN_DEBOUNCE_MS) {
       showStatus('info', infoIco(), `Ignored repeat scan of "${code}"`);
-      if (inputEl) inputEl.focus();
       return;
     }
     lastMutation = { code, mode, time: now };
   }
-  if      (mode === 'write')  await doWrite(code, source);
-  else if (mode === 'append') await doAppend(code, source);
-  else                        await doJump(code, source);
+  
+  if (mode === 'write') await doWrite(code);
+  else if (mode === 'append') await doAppend(code);
+  else await doJump(code);
 }
 
+/**
+ * Writes the code to the currently selected row.
+ * @param {string} code 
+ * @param {string} source 
+ */
 async function doWrite(code, source) {
   if (!selectedRowId) {
     showStatus('error', warnIco(), 'No row selected — click a row in the table first.');
@@ -1021,6 +1087,11 @@ async function doWrite(code, source) {
   if (inputEl) inputEl.focus();
 }
 
+/**
+ * Appends a new record to the table.
+ * @param {string} code 
+ * @param {string} source 
+ */
 async function doAppend(code, source) {
   if (blockDuplicates && isDuplicate(code, null)) {
     showStatus('error', warnIco(), `Duplicate blocked — "${code}" already exists in ${barcodeColumn}.`);
@@ -1040,6 +1111,11 @@ async function doAppend(code, source) {
   if (inputEl) inputEl.focus();
 }
 
+/**
+ * Jumps to the row containing the scanned code.
+ * @param {string} code 
+ * @param {string} source 
+ */
 async function doJump(code, source) {
   const match = tableData.find(r => String(r[barcodeColumn]) === String(code));
   if (!match) {
@@ -1053,8 +1129,13 @@ async function doJump(code, source) {
   if (inputEl) inputEl.focus();
 }
 
-// ═══ Status ═══════════════════════════════════════════════════════════════════
 let stTimer;
+/**
+ * Displays status messages to the user.
+ * @param {'success'|'error'|'info'} type 
+ * @param {string} ico - SVG HTML string.
+ * @param {string} msg 
+ */
 function showStatus(type, ico, msg) {
   const el = document.getElementById('status');
   if (!el) return;
@@ -1065,24 +1146,27 @@ function showStatus(type, ico, msg) {
   if (type === 'error') playErrorBeep();
 }
 
-// ═══ Sound ════════════════════════════════════════════════════════════════════
 let audioCtx = null;
+/**
+ * Primes the browser AudioContext for audible cues.
+ */
 function primeAudio() {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
   } catch (e) {}
 }
-// Browsers require a user gesture before audio can play. Prime on the first
-// interaction so beeps still fire later for scans arriving over WebSocket.
+
 document.addEventListener('pointerdown', primeAudio, { once: true });
 document.addEventListener('keydown', primeAudio, { once: true });
 
+/**
+ * Plays an error beep sound.
+ */
 function playErrorBeep() {
   try {
     audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
     if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-    // Two short low descending tones read as an "error" cue.
     const now = audioCtx.currentTime;
     [[220, now, 0.12], [175, now + 0.13, 0.16]].forEach(([freq, start, dur]) => {
       const osc  = audioCtx.createOscillator();
@@ -1099,15 +1183,10 @@ function playErrorBeep() {
   } catch (e) {}
 }
 
-function checkIco() {
-  return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>`;
-}
-function warnIco() {
-  return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>`;
-}
-function infoIco() {
-  return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25h.008v4.5h-.008v-4.5ZM12 7.5h.008v.008H12V7.5Z"/><circle cx="12" cy="12" r="8.25" stroke-width="1.6"/></svg>`;
-}
+// Icon Helpers
+function checkIco() { return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg>`; }
+function warnIco() { return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>`; }
+function infoIco() { return `<svg fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M11.25 11.25h.008v4.5h-.008v-4.5ZM12 7.5h.008v.008H12V7.5Z"/><circle cx="12" cy="12" r="8.25" stroke-width="1.6"/></svg>`; }
 
 window.addEventListener('load', () => { if (inputEl) inputEl.focus(); });
 </script>

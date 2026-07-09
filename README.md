@@ -2,7 +2,7 @@
 
 A lightweight Python server + Grist custom widget that lets [Binary Eye](https://github.com/markusfisch/BinaryEye) stream scanned values directly into a Grist table in real time.
 
-![Screenshot](https://i.ibb.co/YTk0c0YV/Screenshot-From-2026-06-29-17-22-32.png)
+![Screenshot](https://i.ibb.co/FS04MJr/Screenshot-From-2026-07-09-20-16-15.png)
 
 
 ```
